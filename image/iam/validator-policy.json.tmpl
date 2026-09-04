@@ -1,0 +1,133 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadValidationInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceStatus",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeVolumes"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RestrictValidationInstanceLifecycle",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RebootInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "ec2:ResourceTag/Purpose": "ami-validation"
+        }
+      }
+    },
+    {
+      "Sid": "ValidationInstanceAndKeyLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteKeyPair",
+        "ec2:ImportKeyPair",
+        "ec2:RebootInstances",
+        "ec2:RunInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TagValidationInstanceDuringLaunch",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Purpose": "ami-validation",
+          "ec2:CreateAction": "RunInstances"
+        },
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "Name",
+            "Purpose"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "SetAdvertisedAddressOnValidationInstance",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Purpose": "ami-validation"
+        },
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": "${ADVERTISED_ADDRESS_TAG}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUntaggedValidationInstances",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Purpose": "ami-validation"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnrelatedValidationKeyDeletion",
+      "Effect": "Deny",
+      "Action": "ec2:DeleteKeyPair",
+      "NotResource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:key-pair/rtpengine-ami-validation-*"
+    },
+    {
+      "Sid": "CleanFailedPackerImage",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteSnapshot",
+        "ec2:DeregisterImage"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/ManagedBy": "packer",
+          "ec2:ResourceTag/Application": "rtpengine"
+        }
+      }
+    },
+    {
+      "Sid": "ReadBuildEncryptedImage",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "${BUILD_KMS_KEY_ARN}",
+      "Condition": {
+        "BoolIfExists": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PassOnlyValidationInstanceRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "${VALIDATION_INSTANCE_ROLE_ARN}",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

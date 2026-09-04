@@ -1,0 +1,43 @@
+[Unit]
+Description=Render instance-specific RTPengine configuration
+Documentation=man:rtpengine(8)
+Wants=network-online.target
+After=network-online.target
+Before=rtpengine-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/rtpengine-ami/firstboot.py
+RemainAfterExit=yes
+User=root
+Group=root
+UMask=0027
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/rtpengine /etc/systemd/system
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE
+IPAddressDeny=any
+IPAddressAllow=169.254.169.254/32
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+TimeoutStartSec={{ rtpengine_ami_firstboot_timeout }}s
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=rtpengine-daemon.service

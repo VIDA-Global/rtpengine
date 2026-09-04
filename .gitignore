@@ -3,3 +3,10 @@
 docs/_*
 bencode.c
 config.mk
+
+# RTPengine AMI build products and account-specific Packer inputs.
+/image/build/
+/image/packer/*.pkrvars.hcl
+!/image/packer/*.pkrvars.hcl.example
+**/__pycache__/
+*.py[cod]

@@ -10,12 +10,52 @@ export with_transcoding
 
 export top_srcdir = $(CURDIR)
 
+ifneq ($(strip $(MAKECMDGOALS)),)
+ifeq ($(strip $(filter-out ami-%,$(MAKECMDGOALS))),)
+ami_only_goals := yes
+endif
+endif
+
 # Initialize all flags, so that we only compute them once.
+ifneq ($(ami_only_goals),yes)
 include lib/deps.Makefile
 
 include lib/lib.Makefile
+endif
 
 .PHONY:	all distclean clean coverity
+.PHONY:	ami-help ami-init ami-fmt ami-validate ami-lint ami-test ami-inspect
+.PHONY:	ami-build ami-validate-ami ami-clean
+
+ami-help:
+	$(MAKE) -C image help
+
+ami-init:
+	$(MAKE) -C image init
+
+ami-fmt:
+	$(MAKE) -C image fmt
+
+ami-validate:
+	$(MAKE) -C image validate
+
+ami-lint:
+	$(MAKE) -C image lint
+
+ami-test:
+	$(MAKE) -C image test
+
+ami-inspect:
+	$(MAKE) -C image inspect
+
+ami-build:
+	$(MAKE) -C image build
+
+ami-validate-ami:
+	$(MAKE) -C image validate-ami
+
+ami-clean:
+	$(MAKE) -C image clean
 
 all:
 	$(MAKE) -C daemon

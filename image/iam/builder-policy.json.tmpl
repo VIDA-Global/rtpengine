@@ -1,0 +1,176 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadEc2BuildInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceStatus",
+        "ec2:DescribeRegions",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVpcs"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BuildTaggedRtpengineImage",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:CreateImage",
+        "ec2:CreateKeyPair",
+        "ec2:CreateSnapshot",
+        "ec2:CreateVolume",
+        "ec2:DeleteKeyPair",
+        "ec2:DeleteSnapshot",
+        "ec2:DeleteVolume",
+        "ec2:DeregisterImage",
+        "ec2:DetachVolume",
+        "ec2:ModifyImageAttribute",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:RegisterImage",
+        "ec2:RunInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEqualsIfExists": {
+          "aws:RequestTag/Application": "rtpengine",
+          "aws:RequestTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "TagResourcesDuringPackerCreation",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "rtpengine",
+          "aws:RequestTag/ManagedBy": "packer",
+          "ec2:CreateAction": [
+            "CreateImage",
+            "CreateSnapshot",
+            "CreateVolume",
+            "RegisterImage",
+            "RunInstances"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TagExistingPackerResources",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Application": "rtpengine",
+          "ec2:ResourceTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUntaggedBuilderInstances",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyDestructiveAccessToUnmanagedResources",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:DeleteSnapshot",
+        "ec2:DeleteVolume",
+        "ec2:DeregisterImage",
+        "ec2:DetachVolume",
+        "ec2:ModifyImageAttribute",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "ec2:ResourceTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnrelatedKeyPairDeletion",
+      "Effect": "Deny",
+      "Action": "ec2:DeleteKeyPair",
+      "NotResource": [
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:key-pair/packer_*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:key-pair/rtpengine-ami-*"
+      ]
+    },
+    {
+      "Sid": "DenyDestructiveAccessToOtherPackerApplications",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:DeleteSnapshot",
+        "ec2:DeleteVolume",
+        "ec2:DeregisterImage",
+        "ec2:DetachVolume",
+        "ec2:ModifyImageAttribute",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "ec2:ResourceTag/Application": "rtpengine"
+        }
+      }
+    },
+    {
+      "Sid": "UseOnlyBuildKmsKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo"
+      ],
+      "Resource": "${BUILD_KMS_KEY_ARN}",
+      "Condition": {
+        "BoolIfExists": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PassOnlyBuildInstanceRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "${BUILD_INSTANCE_ROLE_ARN}",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

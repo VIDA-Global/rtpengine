@@ -1,0 +1,7 @@
+---
+- name: Build the RTPengine Ubuntu 26.04 ARM64 image
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: rtpengine_ami

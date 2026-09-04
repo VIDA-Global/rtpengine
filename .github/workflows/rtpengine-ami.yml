@@ -1,0 +1,148 @@
+name: RTPengine ARM64 AMI
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rtpengine-ami-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AMI_BUILD_REGION || 'us-east-2' }}
+
+jobs:
+  static:
+    name: AWS-free image validation
+    if: github.ref == vars.AMI_TRUSTED_REF
+    runs-on: [self-hosted, linux, ARM64, rtpengine-ami]
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Initialize pinned tooling
+        run: make ami-init
+      - name: Validate, lint, and test
+        run: |
+          make ami-validate
+          make ami-lint
+          make ami-test
+
+  build:
+    name: Build source-region AMI
+    if: github.ref == vars.AMI_TRUSTED_REF
+    needs: static
+    runs-on: [self-hosted, linux, ARM64, rtpengine-ami]
+    environment: rtpengine-ami-build
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      ami-id: ${{ steps.identity.outputs.ami_id }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Assume builder role through OIDC
+        uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AMI_BUILDER_ROLE_ARN }}
+          role-session-name: rtpengine-ami-build-${{ github.run_id }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - name: Render non-secret Packer variables
+        env:
+          BUILD_INSTANCE_PROFILE: ${{ vars.AMI_BUILD_INSTANCE_PROFILE }}
+          KMS_KEY_ID: ${{ vars.AMI_BUILD_KMS_KEY_ID }}
+          SECURITY_GROUP_IDS: ${{ vars.AMI_BUILD_SECURITY_GROUP_IDS_JSON }}
+          SOURCE_AMI_ID: ${{ vars.AMI_UBUNTU_2604_ARM64_SOURCE_AMI_ID }}
+          SUBNET_ID: ${{ vars.AMI_BUILD_SUBNET_ID }}
+          VPC_ID: ${{ vars.AMI_BUILD_VPC_ID }}
+        run: |
+          set -euo pipefail
+          [[ $SOURCE_AMI_ID =~ ^ami-[0-9a-f]{17}$ ]]
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' \
+            <<<"$SECURITY_GROUP_IDS"
+          {
+            printf 'aws_region = %s\n' "$(jq -Rn --arg v "$AWS_REGION" '$v')"
+            printf 'source_ami_id = %s\n' "$(jq -Rn --arg v "$SOURCE_AMI_ID" '$v')"
+            printf 'instance_type = "m9g.large"\n'
+            printf 'vpc_id = %s\n' "$(jq -Rn --arg v "$VPC_ID" '$v')"
+            printf 'subnet_id = %s\n' "$(jq -Rn --arg v "$SUBNET_ID" '$v')"
+            printf 'security_group_ids = %s\n' "$(jq -c . <<<"$SECURITY_GROUP_IDS")"
+            printf 'build_instance_profile = %s\n' \
+              "$(jq -Rn --arg v "$BUILD_INSTANCE_PROFILE" '$v')"
+            printf 'kms_key_id = %s\n' "$(jq -Rn --arg v "$KMS_KEY_ID" '$v')"
+            printf 'build_id = %s\n' \
+              "$(jq -Rn --arg v "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" '$v')"
+            printf 'additional_tags = { GitCommit = %s, GitHubRepository = %s }\n' \
+              "$(jq -Rn --arg v "$GITHUB_SHA" '$v')" \
+              "$(jq -Rn --arg v "$GITHUB_REPOSITORY" '$v')"
+          } > image/packer/ci.pkrvars.hcl
+      - name: Initialize Packer and build the AMI
+        run: |
+          make ami-init
+          make ami-build VARS_FILE=packer/ci.pkrvars.hcl
+      - name: Record AMI identity
+        id: identity
+        run: |
+          set -euo pipefail
+          artifact_id=$(jq -er '.builds[-1].artifact_id' image/build/packer-manifest.json)
+          ami_id=${artifact_id#*:}
+          [[ $ami_id =~ ^ami-[0-9a-f]+$ ]]
+          jq -n \
+            --arg region "$AWS_REGION" \
+            --arg ami_id "$ami_id" \
+            --arg source_ami_id "${{ vars.AMI_UBUNTU_2604_ARM64_SOURCE_AMI_ID }}" \
+            --arg build_id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            '{region:$region,ami_id:$ami_id,source_ami_id:$source_ami_id,build_id:$build_id}' \
+            > image/build/source-ami.json
+          printf 'ami_id=%s\n' "$ami_id" >> "$GITHUB_OUTPUT"
+      - name: Upload build manifests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rtpengine-source-ami-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            image/build/packer-manifest.json
+            image/build/source-ami.json
+            image/build/source/source-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  validate:
+    name: Launch and validate AMI
+    if: github.ref == vars.AMI_TRUSTED_REF
+    needs: build
+    runs-on: [self-hosted, linux, ARM64, rtpengine-ami]
+    environment: rtpengine-ami-validation
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Assume validator role through OIDC
+        uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AMI_VALIDATOR_ROLE_ARN }}
+          role-session-name: rtpengine-ami-validate-${{ github.run_id }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - name: Launch, reboot, and validate
+        env:
+          AMI_ID: ${{ needs.build.outputs.ami-id }}
+          CLEAN_FAILED_AMI: 'true'
+          EXPECTED_KMS_KEY_ID: ${{ vars.AMI_BUILD_KMS_KEY_ID }}
+          SECURITY_GROUP_ID: ${{ vars.AMI_VALIDATION_SECURITY_GROUP_ID }}
+          SUBNET_ID: ${{ vars.AMI_VALIDATION_SUBNET_ID }}
+          VALIDATION_INSTANCE_PROFILE: ${{ vars.AMI_VALIDATION_INSTANCE_PROFILE }}
+        run: make ami-validate-ami

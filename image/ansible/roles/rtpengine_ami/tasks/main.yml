@@ -1,0 +1,522 @@
+---
+- name: Assert the supported build platform
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == 'aarch64'
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('26.04', '==')
+    fail_msg: This image must be built natively on Ubuntu 26.04 ARM64.
+
+- name: Read the Debian package architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: rtpengine_ami_dpkg_architecture
+  changed_when: false
+
+- name: Validate immutable source and production settings
+  ansible.builtin.assert:
+    that:
+      - rtpengine_ami_dpkg_architecture.stdout == 'arm64'
+      - rtpengine_ami_version is match('^[0-9A-Za-z.+:~_-]+$')
+      - rtpengine_ami_source_commit is match('^[0-9a-f]{40}$')
+      - rtpengine_ami_source_tree is match('^[0-9a-f]{40}$')
+      - rtpengine_ami_source_sha256 is match('^[0-9a-f]{64}$')
+      - rtpengine_ami_no_fallback | bool
+      - (rtpengine_ami_media_port_min | int) >= 1024
+      - (rtpengine_ami_media_port_max | int) <= 65535
+      - >-
+        (rtpengine_ami_media_port_min | int)
+        < (rtpengine_ami_media_port_max | int)
+      - >-
+        (rtpengine_ami_ng_port | int) not in
+        [(rtpengine_ami_cli_port | int), (rtpengine_ami_http_port | int)]
+      - >-
+        (rtpengine_ami_cli_port | int) != (rtpengine_ami_http_port | int)
+      - (rtpengine_ami_log_level | int) >= 0
+      - (rtpengine_ami_log_level | int) <= 7
+      - (rtpengine_ami_tos | int) >= 0
+      - (rtpengine_ami_tos | int) <= 255
+      - (rtpengine_ami_table | int) <= 63
+      - rtpengine_ami_nftables_chain is match('^[A-Za-z_][A-Za-z0-9_]{0,31}$')
+      - rtpengine_ami_nftables_base_chain is match('^[A-Za-z_][A-Za-z0-9_]{0,31}$')
+    fail_msg: >-
+      Source identity, ARM64 architecture, or reviewed RTPengine settings are
+      invalid.
+
+- name: Wait for cloud-init before changing packages
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+
+- name: Update all packages, including the kernel
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    cache_valid_time: 3600
+
+- name: Reboot into the updated kernel
+  ansible.builtin.reboot:
+    connect_timeout: 10
+    post_reboot_delay: 10
+    reboot_timeout: 900
+
+- name: Record the updated kernel release
+  ansible.builtin.command: uname -r
+  register: rtpengine_ami_uname
+  changed_when: false
+
+- name: Set the updated kernel identity
+  ansible.builtin.set_fact:
+    rtpengine_ami_kernel_release: "{{ rtpengine_ami_uname.stdout | trim }}"
+
+- name: Install matching kernel headers and package build bootstrap
+  ansible.builtin.apt:
+    name: >-
+      {{ rtpengine_ami_bootstrap_build_packages
+         + rtpengine_ami_runtime_packages
+         + ['linux-headers-' + rtpengine_ami_kernel_release] }}
+    state: present
+    install_recommends: false
+
+- name: Verify the uploaded source archive
+  ansible.builtin.stat:
+    path: "{{ rtpengine_ami_source_archive }}"
+    checksum_algorithm: sha256
+  register: rtpengine_ami_archive
+
+- name: Read uploaded source provenance
+  ansible.builtin.slurp:
+    src: "{{ rtpengine_ami_source_provenance }}"
+  register: rtpengine_ami_uploaded_provenance
+
+- name: Validate uploaded source inputs
+  ansible.builtin.assert:
+    that:
+      - rtpengine_ami_archive.stat.isreg | default(false)
+      - rtpengine_ami_archive.stat.checksum == rtpengine_ami_source_sha256
+      - >-
+        (rtpengine_ami_uploaded_provenance.content | b64decode |
+        from_json).commit == rtpengine_ami_source_commit
+      - >-
+        (rtpengine_ami_uploaded_provenance.content | b64decode |
+        from_json).tree == rtpengine_ami_source_tree
+      - >-
+        (rtpengine_ami_uploaded_provenance.content | b64decode |
+        from_json).archive_sha256 == rtpengine_ami_source_sha256
+      - >-
+        (rtpengine_ami_uploaded_provenance.content | b64decode |
+        from_json).version == rtpengine_ami_version
+    fail_msg: >-
+      The uploaded committed-HEAD archive or provenance does not match
+      Packer's immutable identity.
+
+- name: Recreate build directories
+  ansible.builtin.file:
+    path: "{{ rtpengine_ami_build_directory }}"
+    state: absent
+
+- name: Create build directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ rtpengine_ami_source_directory }}"
+    - "{{ rtpengine_ami_package_directory }}"
+
+- name: Extract the verified committed source
+  ansible.builtin.unarchive:
+    src: "{{ rtpengine_ami_source_archive }}"
+    dest: "{{ rtpengine_ami_source_directory }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+
+- name: Generate Resolute Debian packaging
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ./generator.sh
+    ./backports/resolute
+    rm -rf ../../debian
+    mv resolute ../../debian
+  args:
+    chdir: "{{ rtpengine_ami_source_directory }}/pkg/deb"
+    executable: /bin/bash
+  changed_when: true
+
+- name: Install exact full-transcoding build dependencies
+  ansible.builtin.shell: |
+    set -euo pipefail
+    unset DEB_BUILD_PROFILES
+    mk-build-deps --install --remove \
+      --tool 'apt-get -o APT::Install-Recommends=false -y' \
+      --build-dep debian/control
+  args:
+    chdir: "{{ rtpengine_ami_source_directory }}"
+    executable: /bin/bash
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true
+
+- name: Run the native RTPengine test suite
+  ansible.builtin.command: make check
+  args:
+    chdir: "{{ rtpengine_ami_source_directory }}"
+  environment:
+    with_transcoding: 'yes'
+  changed_when: true
+
+- name: Clean test build outputs before package construction
+  ansible.builtin.command: make clean
+  args:
+    chdir: "{{ rtpengine_ami_source_directory }}"
+  environment:
+    with_transcoding: 'yes'
+  changed_when: true
+
+- name: Build native full-transcoding binary packages
+  ansible.builtin.command:
+    argv:
+      - dpkg-buildpackage
+      - --build=binary
+      - --no-sign
+      - "--jobs={{ rtpengine_ami_build_jobs }}"
+  args:
+    chdir: "{{ rtpengine_ami_source_directory }}"
+  environment:
+    DEB_BUILD_OPTIONS: "noautodbgsym parallel={{ rtpengine_ami_build_jobs }}"
+    DEB_BUILD_PROFILES: ''
+    SOURCE_DATE_EPOCH: >-
+      {{ (rtpengine_ami_uploaded_provenance.content | b64decode |
+          from_json).source_date_epoch | string }}
+    with_transcoding: 'yes'
+  changed_when: true
+
+- name: Select only approved runtime packages
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -f -- "$PACKAGE_DIR"/*.deb
+    for package_name in \
+      rtpengine-daemon rtpengine-utils rtpengine-kernel-dkms; do
+      match_count=0
+      while IFS= read -r -d '' candidate; do
+        if [[ $(dpkg-deb -f "$candidate" Package) == "$package_name" ]]; then
+          if [[ $package_name == rtpengine-daemon ]]; then
+            expected_architecture=arm64
+          else
+            expected_architecture=all
+          fi
+          [[ $(dpkg-deb -f "$candidate" Architecture) == "$expected_architecture" ]]
+          [[ $(dpkg-deb -f "$candidate" Version) == "$EXPECTED_VERSION" ]]
+          cp -- "$candidate" "$PACKAGE_DIR/$package_name.deb"
+          ((match_count += 1))
+        fi
+      done < <(
+        find "$(dirname "$SOURCE_DIR")" \
+          -maxdepth 1 -type f -name '*.deb' -print0
+      )
+      [[ $match_count -eq 1 ]] || {
+        printf 'Expected one package named %s, found %d\n' \
+          "$package_name" "$match_count" >&2
+        exit 1
+      }
+    done
+  args:
+    executable: /bin/bash
+  environment:
+    PACKAGE_DIR: "{{ rtpengine_ami_package_directory }}"
+    SOURCE_DIR: "{{ rtpengine_ami_source_directory }}"
+    EXPECTED_VERSION: "{{ rtpengine_ami_version }}"
+  changed_when: true
+
+- name: Inspect an existing package service-start policy
+  ansible.builtin.stat:
+    path: /usr/sbin/policy-rc.d
+  register: rtpengine_ami_policy_rc_stat
+
+- name: Preserve an existing package service-start policy
+  ansible.builtin.slurp:
+    src: /usr/sbin/policy-rc.d
+  register: rtpengine_ami_policy_rc_content
+  when: rtpengine_ami_policy_rc_stat.stat.exists
+
+- name: Prevent package post-install service startup during image construction
+  ansible.builtin.copy:
+    content: "#!/bin/sh\nexit 101\n"
+    dest: /usr/sbin/policy-rc.d
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install only approved RTPengine packages without recommends
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - install
+      - --no-install-recommends
+      - --yes
+      - "{{ rtpengine_ami_package_directory }}/rtpengine-utils.deb"
+      - "{{ rtpengine_ami_package_directory }}/rtpengine-daemon.deb"
+      - "{{ rtpengine_ami_package_directory }}/rtpengine-kernel-dkms.deb"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true
+
+- name: Restore the source image package service-start policy
+  ansible.builtin.copy:
+    content: "{{ rtpengine_ami_policy_rc_content.content | b64decode }}"
+    dest: /usr/sbin/policy-rc.d
+    owner: "{{ rtpengine_ami_policy_rc_stat.stat.pw_name }}"
+    group: "{{ rtpengine_ami_policy_rc_stat.stat.gr_name }}"
+    mode: "{{ rtpengine_ami_policy_rc_stat.stat.mode }}"
+  when: rtpengine_ami_policy_rc_stat.stat.exists
+
+- name: Remove the temporary package service-start policy
+  ansible.builtin.file:
+    path: /usr/sbin/policy-rc.d
+    state: absent
+  when: not rtpengine_ami_policy_rc_stat.stat.exists
+
+- name: Read installed package versions
+  ansible.builtin.command: >-
+    dpkg-query -W -f=${Package}=${Version}\n
+    {{ rtpengine_ami_installed_packages | join(' ') }}
+  register: rtpengine_ami_package_query
+  changed_when: false
+
+- name: Verify the exact RTPengine package inventory
+  ansible.builtin.shell: |
+    set -euo pipefail
+    expected=$'rtpengine-daemon\nrtpengine-kernel-dkms\nrtpengine-utils'
+    actual=$(dpkg-query -W -f='${binary:Package} ${db:Status-Abbrev}\n' \
+      'rtpengine*' 2>/dev/null | awk '$2 == "ii" { print $1 }' | sort)
+    [[ $actual == "$expected" ]]
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Read the DKMS module version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dkms status -m rtpengine -k "$KERNEL" -a aarch64 | \
+      awk -F'[,/ ]+' '$1 == "rtpengine" && $0 ~ /installed$/ { print $2 }'
+  args:
+    executable: /bin/bash
+  environment:
+    KERNEL: "{{ rtpengine_ami_kernel_release }}"
+  register: rtpengine_ami_dkms_version_result
+  changed_when: false
+  failed_when: rtpengine_ami_dkms_version_result.stdout_lines | length != 1
+
+- name: Set package and DKMS provenance facts
+  ansible.builtin.set_fact:
+    rtpengine_ami_dkms_version: >-
+      {{ rtpengine_ami_dkms_version_result.stdout | trim }}
+    rtpengine_ami_package_versions: >-
+      {{ dict(rtpengine_ami_package_query.stdout_lines
+              | map('split', '=', 1)) }}
+
+- name: Validate installed package versions
+  ansible.builtin.assert:
+    that:
+      - >-
+        (rtpengine_ami_package_versions.keys() | list | sort)
+        == (rtpengine_ami_installed_packages | sort)
+      - >-
+        (rtpengine_ami_package_versions.values() | list | unique | list)
+        == [rtpengine_ami_version]
+    fail_msg: >-
+      Installed RTPengine package names or versions differ from the source
+      identity.
+
+- name: Locate the installed kernel module
+  ansible.builtin.command: modinfo -n nft_rtpengine
+  register: rtpengine_ami_module_path
+  changed_when: false
+
+- name: Read kernel module vermagic
+  ansible.builtin.command: modinfo -F vermagic nft_rtpengine
+  register: rtpengine_ami_module_vermagic
+  changed_when: false
+
+- name: Validate package binaries, DKMS module path, and vermagic
+  ansible.builtin.shell: |
+    set -euo pipefail
+    file /usr/bin/rtpengine | grep -F 'ARM aarch64'
+    test "$(dpkg --print-architecture)" = arm64
+    case "$MODULE_PATH" in
+      /lib/modules/"$KERNEL"/updates/dkms/nft_rtpengine.ko*) ;;
+      *)
+        printf 'Unexpected DKMS module path: %s\n' "$MODULE_PATH" >&2
+        exit 1
+        ;;
+    esac
+    case "$VERMAGIC" in
+      "$KERNEL "*) ;;
+      *)
+        printf 'Module vermagic does not match %s: %s\n' \
+          "$KERNEL" "$VERMAGIC" >&2
+        exit 1
+        ;;
+    esac
+    modprobe nft_rtpengine
+    grep -q '^nft_rtpengine ' /proc/modules
+  args:
+    executable: /bin/bash
+  environment:
+    KERNEL: "{{ rtpengine_ami_kernel_release }}"
+    MODULE_PATH: "{{ rtpengine_ami_module_path.stdout }}"
+    VERMAGIC: "{{ rtpengine_ami_module_vermagic.stdout }}"
+  changed_when: true
+
+- name: Create immutable image and runtime asset directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /usr/share/rtpengine-ami
+    - /usr/libexec/rtpengine-ami
+    - /etc/rtpengine
+
+- name: Preserve exact local source provenance
+  ansible.builtin.copy:
+    src: "{{ rtpengine_ami_source_provenance }}"
+    remote_src: true
+    dest: /usr/share/rtpengine-ami/build-source.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Write installed package and source provenance
+  ansible.builtin.template:
+    src: source-manifest.json.j2
+    dest: /usr/share/rtpengine-ami/source-manifest.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install reviewed RTPengine configuration template
+  ansible.builtin.template:
+    src: rtpengine.conf.j2
+    dest: /usr/share/rtpengine-ami/rtpengine.conf.template
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install private/advertised address renderer
+  ansible.builtin.copy:
+    src: rtpengine-firstboot.py
+    dest: /usr/libexec/rtpengine-ami/firstboot.py
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install first-boot metadata settings
+  ansible.builtin.template:
+    src: rtpengine-ami-runtime.ini.j2
+    dest: /etc/rtpengine/ami-runtime.ini
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install AMI smoke test
+  ansible.builtin.copy:
+    src: smoke.py
+    dest: /usr/libexec/rtpengine-ami/smoke.py
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install runtime configuration unit
+  ansible.builtin.template:
+    src: rtpengine-firstboot.service.j2
+    dest: /etc/systemd/system/rtpengine-firstboot.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd
+
+- name: Flush systemd reload before enabling runtime units
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable runtime renderer and RTPengine for first boot
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+  loop:
+    - rtpengine-firstboot.service
+    - rtpengine-daemon.service
+
+- name: Hold the running kernel and matching headers
+  ansible.builtin.shell: |
+    set -euo pipefail
+    base_kernel=${KERNEL%-*}
+    mapfile -t packages < <(
+      dpkg-query -W -f='${binary:Package} ${db:Status-Abbrev}\n' 'linux-*' |
+        awk '$2 == "ii" { sub(/:.*/, "", $1); print $1 }' |
+        while read -r package; do
+          case "$package" in
+            linux-aws|linux-image-aws|linux-headers-aws|\
+            linux-*-$KERNEL|linux-headers-$base_kernel)
+              printf '%s\n' "$package"
+              ;;
+          esac
+        done
+    )
+    [[ -n ${packages[*]:-} ]]
+    apt-mark hold "${packages[@]}"
+  args:
+    executable: /bin/bash
+  environment:
+    KERNEL: "{{ rtpengine_ami_kernel_release }}"
+  when: rtpengine_ami_hold_kernel | bool
+  changed_when: true
+
+- name: Remove synthetic build dependency package
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mapfile -t packages < <(
+      dpkg-query -W -f='${binary:Package}\n' '*build-deps*' 2>/dev/null |
+        grep '^rtpengine-build-deps' || true
+    )
+    if [[ -n ${packages[*]:-} ]]; then
+      apt-get purge -y "${packages[@]}"
+    fi
+  args:
+    executable: /bin/bash
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true
+
+- name: Remove bootstrap build packages and orphaned build dependencies
+  ansible.builtin.apt:
+    name: "{{ rtpengine_ami_bootstrap_build_packages }}"
+    state: absent
+    purge: true
+    autoremove: true
+
+- name: Remove source, packages, package caches, and transient inputs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ rtpengine_ami_build_directory }}"
+    - "{{ rtpengine_ami_source_archive }}"
+    - "{{ rtpengine_ami_source_provenance }}"
+    - /var/cache/apt/archives
+    - /var/lib/apt/lists
+
+- name: Reset machine-specific image state
+  ansible.builtin.shell: |
+    set -euo pipefail
+    modprobe -r nft_rtpengine
+    cloud-init clean --logs --machine-id
+    rm -f /etc/ssh/ssh_host_*
+    rm -f /root/.bash_history /home/ubuntu/.bash_history
+    find /var/log -type f -exec truncate -s 0 {} +
+  args:
+    executable: /bin/bash
+  changed_when: true

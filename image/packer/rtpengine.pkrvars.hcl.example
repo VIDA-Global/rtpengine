@@ -1,0 +1,22 @@
+aws_region             = "us-east-2"
+source_ami_id          = "ami-0123456789abcdef0" # Approved Ubuntu 26.04 ARM64 image.
+instance_type          = "m9g.large"
+vpc_id                 = "vpc-0123456789abcdef0"
+subnet_id              = "subnet-0123456789abcdef0" # Must support a public builder IP.
+security_group_ids     = ["sg-0123456789abcdef0"]    # Permit SSH only from the build runner.
+build_instance_profile = "" # Optional; leave empty unless build egress requires an EC2 role.
+kms_key_id             = "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+build_id                = "local-001"
+
+additional_tags = {
+  CostCenter = "telephony"
+  Owner      = "platform"
+}
+
+# Reviewed production settings are typed in variables.pkr.hcl. Override only
+# through reviewed values, never by injecting arbitrary RTPengine arguments.
+# rtpengine_advertised_address_tag = "RtpEngineAdvertisedAddress"
+# rtpengine_max_sessions           = 5000
+# rtpengine_metadata_attempts       = 12
+# rtpengine_metadata_timeout        = 2
+# rtpengine_firstboot_timeout       = 120
