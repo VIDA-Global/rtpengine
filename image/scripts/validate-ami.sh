@@ -277,13 +277,13 @@ config_value() {
 table=$(config_value table)
 [[ $table =~ ^([0-9]|[1-5][0-9]|6[0-3])$ ]]
 [[ $(config_value no-fallback) == true ]]
-[[ $(config_value interface) == "${private_ip}!${private_ip}" ]]
+[[ $(config_value interface) == "external/${private_ip}!${private_ip};internal/${private_ip}" ]]
 ng_listener=$(config_value listen-ng)
 cli_listener=$(config_value listen-cli)
 http_listener=$(config_value listen-http)
 [[ $ng_listener == "${private_ip}:"* ]]
-[[ $cli_listener == "${private_ip}:"* ]]
-[[ $http_listener == "${private_ip}:"* ]]
+[[ $cli_listener == "127.0.0.1:"* ]]
+[[ $http_listener == "127.0.0.1:"* ]]
 ng_port=${ng_listener##*:}
 cli_port=${cli_listener##*:}
 http_port=${http_listener##*:}

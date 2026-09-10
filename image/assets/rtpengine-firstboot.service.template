@@ -1,5 +1,5 @@
 [Unit]
-Description=Render instance-specific RTPengine configuration
+Description=Render validated instance-specific RTPengine configuration
 Documentation=man:rtpengine(8)
 Wants=network-online.target
 After=network-online.target

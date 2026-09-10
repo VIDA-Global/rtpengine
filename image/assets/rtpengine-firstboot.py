@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Render the instance-specific RTPengine configuration on first boot."""
+"""Render instance-specific RTPengine configuration independently of provisioning."""
 
 import argparse
 import configparser
@@ -190,7 +190,7 @@ def validate_rendered(content, private, advertised):
         raise ConfigurationError("media port range is invalid")
     if max_sessions < 1 or not 0 <= log_level <= 7 or not 0 <= tos <= 255:
         raise ConfigurationError("session, log, or TOS value is outside safe bounds")
-    if config.get("interface") != f"{private}!{advertised}":
+    if config.get("interface") != f"external/{private}!{advertised};internal/{private}":
         raise ConfigurationError("media interface does not match runtime addresses")
     listener_ports = []
     for name in ("listen-ng", "listen-cli", "listen-http"):
@@ -200,8 +200,9 @@ def validate_rendered(content, private, advertised):
             port = int(raw_port)
         except ValueError as error:
             raise ConfigurationError(f"{name} is invalid") from error
-        if host != private or not 1024 <= port <= 65535:
-            raise ConfigurationError(f"{name} is not a private listener")
+        expected_host = private if name == "listen-ng" else "127.0.0.1"
+        if host != expected_host or not 1024 <= port <= 65535:
+            raise ConfigurationError(f"{name} does not match its required listener boundary")
         listener_ports.append(port)
     if len(set(listener_ports)) != len(listener_ports):
         raise ConfigurationError("control listener ports must be distinct")

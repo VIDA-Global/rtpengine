@@ -22,7 +22,7 @@ locals {
     SourceSHA256    = local.source_provenance.archive_sha256
     Version         = local.source_provenance.version
   })
-  role_vars = {
+  provision_input = {
     rtpengine_ami_version                = local.source_provenance.version
     rtpengine_ami_source_commit          = local.source_provenance.commit
     rtpengine_ami_source_tree            = local.source_provenance.tree
@@ -100,26 +100,57 @@ build {
   name    = "rtpengine-arm64"
   sources = ["source.amazon-ebs.rtpengine_arm64"]
 
+  provisioner "shell" {
+    inline = ["install -d -m 0700 /tmp/rtpengine-image-upload /tmp/rtpengine-image-upload/assets /tmp/rtpengine-image-upload/provision"]
+  }
+
   provisioner "file" {
     source      = "${local.image_dir}/build/source/rtpengine-head.tar.gz"
-    destination = "/tmp/rtpengine-source.tar.gz"
+    destination = "/tmp/rtpengine-image-upload/source.tar.gz"
   }
 
   provisioner "file" {
     source      = "${local.image_dir}/build/source/source-manifest.json"
-    destination = "/tmp/rtpengine-source-provenance.json"
+    destination = "/tmp/rtpengine-image-upload/source.json"
   }
 
-  provisioner "ansible" {
-    playbook_file = "${local.image_dir}/ansible/playbooks/ami.yml"
-    user          = var.ssh_username
-    extra_arguments = [
-      "--extra-vars",
-      jsonencode(local.role_vars)
+  provisioner "file" {
+    source      = "${local.image_dir}/assets/"
+    destination = "/tmp/rtpengine-image-upload/assets"
+  }
+  provisioner "file" {
+    source      = "${local.image_dir}/provision/"
+    destination = "/tmp/rtpengine-image-upload/provision"
+  }
+  provisioner "file" {
+    content     = jsonencode(local.provision_input)
+    destination = "/tmp/rtpengine-image-upload/input.json"
+  }
+  provisioner "shell" {
+    inline = [
+      "sudo install -d -o root -g root -m 0755 /opt/rtpengine-image-build",
+      "sudo cp -a /tmp/rtpengine-image-upload/. /opt/rtpengine-image-build/",
+      "sudo chown -R root:root /opt/rtpengine-image-build",
+      "sudo chmod -R go-w /opt/rtpengine-image-build",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh preflight",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh upgrade"
     ]
-    ansible_env_vars = [
-      "ANSIBLE_CONFIG=${local.image_dir}/ansible/ansible.cfg",
-      "ANSIBLE_HOST_KEY_CHECKING=False"
+  }
+  provisioner "shell" {
+    expect_disconnect = true
+    inline            = ["sudo reboot"]
+  }
+  provisioner "shell" {
+    pause_before = "30s"
+    inline = [
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh dependencies",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh build",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh install",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh configure",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh hold",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh cleanup",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh verify",
+      "sudo bash /opt/rtpengine-image-build/provision/provision.sh sanitize"
     ]
   }
 

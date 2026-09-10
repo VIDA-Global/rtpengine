@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""End-to-end health check for an RTPengine AMI instance."""
+"""Local forwarding smoke check for an RTPengine AMI instance, not HA evidence."""
 
 import argparse
 import configparser
@@ -362,7 +362,12 @@ def main(argv=None):
     arguments = parser.parse_args(argv)
     config = read_runtime_config(arguments.config)
     try:
-        private, advertised = config.get("interface", "").split("!", 1)
+        external, internal = config.get("interface", "").split(";")
+        if not external.startswith("external/"):
+            raise ValueError("external interface missing")
+        private, advertised = external.removeprefix("external/").split("!", 1)
+        if internal != "internal/" + private:
+            raise ValueError("internal interface mismatch")
     except ValueError as error:
         raise SmokeError("media interface has no advertised address") from error
     if private != arguments.host:

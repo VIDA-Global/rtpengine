@@ -9,7 +9,7 @@ from unittest import mock
 ROOT = Path(__file__).parents[2]
 MODULE_PATH = (
     ROOT
-    / "image/ansible/roles/rtpengine_ami/files/rtpengine-firstboot.py"
+    / "image/assets/rtpengine-firstboot.py"
 )
 SPEC = importlib.util.spec_from_file_location("rtpengine_firstboot", MODULE_PATH)
 runtime = importlib.util.module_from_spec(SPEC)
@@ -119,10 +119,10 @@ class RenderingTests(unittest.TestCase):
         valid = """[rtpengine]
 table = 0
 no-fallback = true
-interface = 10.0.0.1!198.51.100.8
+interface = external/10.0.0.1!198.51.100.8;internal/10.0.0.1
 listen-ng = 10.0.0.1:2223
-listen-cli = 10.0.0.1:2224
-listen-http = 10.0.0.1:2225
+listen-cli = 127.0.0.1:2224
+listen-http = 127.0.0.1:2225
 port-min = 30000
 port-max = 39999
 nftables-family = ip
@@ -135,7 +135,7 @@ tos = 184
         runtime.validate_rendered(valid, "10.0.0.1", "198.51.100.8")
         with self.assertRaises(runtime.ConfigurationError):
             runtime.validate_rendered(
-                valid.replace("10.0.0.1:2225", "0.0.0.0:2225"),
+                valid.replace("127.0.0.1:2225", "0.0.0.0:2225"),
                 "10.0.0.1",
                 "198.51.100.8",
             )
@@ -157,10 +157,10 @@ tos = 184
         valid = """[rtpengine]
 table = 42
 no-fallback = true
-interface = 10.0.0.1!10.0.0.2
+interface = external/10.0.0.1!10.0.0.2;internal/10.0.0.1
 listen-ng = 10.0.0.1:12223
-listen-cli = 10.0.0.1:12224
-listen-http = 10.0.0.1:12225
+listen-cli = 127.0.0.1:12224
+listen-http = 127.0.0.1:12225
 port-min = 20000
 port-max = 20999
 nftables-family = ip

@@ -1,10 +1,10 @@
 [rtpengine]
 table = {{ rtpengine_ami_table }}
-no-fallback = {{ rtpengine_ami_no_fallback | ternary('true', 'false') }}
-interface = @PRIVATE_IPV4@!@ADVERTISED_IPV4@
+no-fallback = true
+interface = external/@PRIVATE_IPV4@!@ADVERTISED_IPV4@;internal/@PRIVATE_IPV4@
 listen-ng = @PRIVATE_IPV4@:{{ rtpengine_ami_ng_port }}
-listen-cli = @PRIVATE_IPV4@:{{ rtpengine_ami_cli_port }}
-listen-http = @PRIVATE_IPV4@:{{ rtpengine_ami_http_port }}
+listen-cli = 127.0.0.1:{{ rtpengine_ami_cli_port }}
+listen-http = 127.0.0.1:{{ rtpengine_ami_http_port }}
 port-min = {{ rtpengine_ami_media_port_min }}
 port-max = {{ rtpengine_ami_media_port_max }}
 nftables-family = {{ rtpengine_ami_nftables_family }}

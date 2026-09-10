@@ -13,7 +13,7 @@ This image project builds RTPengine from the repository's exact committed `HEAD`
 | Storage | Encrypted GP3 using the configured customer-managed KMS key |
 | AMI visibility | Private; no public launch permissions |
 | Build connectivity | Public-IP SSH through a pre-existing subnet and security groups |
-| Runtime control listeners | Bound to the instance's primary private IPv4 address |
+| Runtime control listeners | NG on primary private IPv4; CLI/HTTP on loopback only |
 | Media forwarding | Kernel forwarding is mandatory; `no-fallback = true` |
 
 The source AMI is never discovered by a broad name filter. `source_ami_id` is required and has no default. Before changing it, an operator must verify Canonical ownership, Ubuntu release `26.04`, ARM64 architecture, virtualization type, root device, publication provenance, and the organization's patch approval. The AMI ID is regional.
@@ -22,7 +22,7 @@ The source AMI is never discovered by a broad name filter. `source_ami_id` is re
 
 ## Approval Boundary
 
-These commands are AWS-free. `init` downloads pinned Packer plugins and Ansible collections but does not authenticate to AWS:
+These commands are AWS-free. `init` downloads the pinned Packer Amazon plugin but does not authenticate to AWS. Image provisioning uses only shell/file provisioners:
 
 ```bash
 make ami-help
@@ -55,7 +55,7 @@ Runtime security groups should separately restrict:
 
 - UDP media ports `30000-39999` to approved media peers.
 - UDP/2223 NG control to approved SIP proxies only.
-- TCP/2224 CLI and TCP/2225 HTTP telemetry to private operator and monitoring networks only.
+- TCP/2224 CLI and TCP/2225 HTTP bind loopback. Use a local collector or controlled operator session; do not expose their administrative routes to monitoring networks.
 - SSH to reviewed administrative sources, or disable SSH in the deployment layer.
 
 Public SSH is a deliberate transitional risk, not a recommended production topology. Moving to private runner routing or Session Manager requires a separately reviewed communicator and IAM design.
@@ -73,7 +73,12 @@ InstanceMetadataTags=enabled
 
 Before RTPengine can start, deployment automation must set the instance tag `RtpEngineAdvertisedAddress` to the exact unicast IPv4 address advertised in SDP. The first-boot service obtains a fresh IMDSv2 token, reads the instance's primary private IPv4 address and that tag, validates both, renders `/etc/rtpengine/rtpengine.conf` atomically as root:`rtpengine` mode `0640`, and only then permits the daemon. A missing, malformed, multicast, loopback, link-local, or unusable address fails closed. The tag may be private when private media routing is intended.
 
-The generated interface is `<private-ip>!<advertised-ip>`. NG, CLI, and HTTP controls bind only to `<private-ip>`. The image does not read Secrets Manager, Parameter Store, user data, or arbitrary daemon arguments.
+The generated logical interfaces are `external/<private-ip>!<advertised-ip>` and
+`internal/<private-ip>`. NG binds the private address; CLI/HTTP bind `127.0.0.1`.
+OpenSIPS must choose the correct media direction for each leg. No Redis connection
+is configured. The image does not read Secrets Manager, Parameter Store, user
+data, or arbitrary daemon arguments. Actual EIP/internal routing and port capacity
+must still be qualified on the production network.
 
 ## Kernel Lifecycle
 

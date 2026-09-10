@@ -12,7 +12,24 @@ make ami-test
 make ami-inspect
 ```
 
-Validation checks Packer formatting and syntax, Ansible playbook syntax, Python compilation, and unit/contract tests. Lint runs ShellCheck, yamllint, and ansible-lint. A missing tool produces a named error and a nonzero exit rather than skipping a gate. `packer validate -syntax-only` uses no AWS credentials. `inspect` and source preparation are also local operations.
+Validation checks Packer formatting and syntax, shell syntax, Python compilation,
+and unit/contract tests. Lint runs ShellCheck and workflow yamllint. A missing tool
+produces a named error and a nonzero exit rather than skipping a gate.
+`packer validate -syntax-only` uses no AWS credentials. `inspect` and source
+preparation are also local operations.
+
+Packer stages source/provenance, product assets, shell phases and closed-schema
+non-secret JSON inputs into a root-owned directory. The phase order is preflight,
+kernel upgrade, an explicit Packer reconnect/reboot boundary, dependencies, native
+package build/test, installation, configuration, kernel hold, cleanup, final
+verification and sanitization. Installation suppresses package service startup
+with a trap-restored policy. Final linkage/module checks happen after cleanup.
+These are destructive image-builder phases, never day-two management commands.
+
+The shell migration preserves the existing Ubuntu 26.04 prototype baseline.
+Moving to a different supported OS/kernel, external media paths, and proving drain/recovery
+are separate qualification gates. No Redis is configured. Static image tests do
+not prove production ASG behavior or DTLS-SRTP continuity.
 
 Formatting with `make ami-fmt` changes Packer files. Review its diff. `make ami-clean` removes generated image build state. Neither command calls AWS.
 
@@ -81,7 +98,13 @@ Cancellation can interrupt shell traps. Operators must inspect instances, key pa
 
 ## Deployment Acceptance
 
-Before admitting calls, the launch template must require IMDSv2, expose tags through IMDS, and supply `RtpEngineAdvertisedAddress`. Confirm the advertised address is routed from both media sides. Confirm security groups allow the entire configured UDP media range and permit NG control only from approved SIP proxies. CLI and HTTP telemetry must remain private.
+Before admitting calls, the launch template must require IMDSv2, expose tags through
+IMDS, and supply `RtpEngineAdvertisedAddress`. Confirm the external advertised
+address is reachable by media peers and the internal private address by FreeSWITCH.
+Confirm security groups allow the configured UDP media range and permit NG control
+only from approved SIP proxies. CLI and HTTP must remain loopback-only. The rendered
+named interfaces and validation scripts enforce these control boundaries; they
+do not prove public EIP routing or DTLS-SRTP by themselves.
 
 The image-level smoke test proves one host's kernel forwarding and control contract. Deployment tests must additionally prove offer/answer/delete behavior, RTP and RTCP in both directions, expected SDP advertisement, packet marking, capacity limits, monitoring, draining, and replacement behavior under realistic load. Because `no-fallback` is mandatory, loss of `nft_rtpengine` must fail readiness and remove the node from service.
 

@@ -1,4 +1,5 @@
 [runtime]
+# Non-secret metadata lookup configuration, rendered at image construction.
 advertised_address_tag = {{ rtpengine_ami_advertised_address_tag }}
 metadata_attempts = {{ rtpengine_ami_metadata_attempts }}
 metadata_timeout = {{ rtpengine_ami_metadata_timeout }}

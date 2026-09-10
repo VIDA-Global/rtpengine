@@ -8,7 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).parents[2]
-MODULE_PATH = ROOT / "image/ansible/roles/rtpengine_ami/files/smoke.py"
+MODULE_PATH = ROOT / "image/assets/smoke.py"
 SPEC = importlib.util.spec_from_file_location("rtpengine_smoke", MODULE_PATH)
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)

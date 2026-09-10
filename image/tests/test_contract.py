@@ -76,26 +76,33 @@ class ImageContractTests(unittest.TestCase):
 
     def test_runtime_fails_closed_and_binds_controls_privately(self) -> None:
         variables = text("packer/variables.pkr.hcl")
-        config = text("ansible/roles/rtpengine_ami/templates/rtpengine.conf.j2")
-        firstboot = text("ansible/roles/rtpengine_ami/files/rtpengine-firstboot.py")
+        config = text("assets/rtpengine.conf.template")
+        firstboot = text("assets/rtpengine-firstboot.py")
         self.assertIn('default     = "RtpEngineAdvertisedAddress"', variables)
         self.assertIn("condition     = var.rtpengine_no_fallback", variables)
         self.assertIn("no-fallback =", config)
-        for listener in ("listen-ng", "listen-cli", "listen-http"):
-            self.assertRegex(config, rf"{listener} = @PRIVATE_IPV4@:")
+        self.assertIn("listen-ng = @PRIVATE_IPV4@:", config)
+        for listener in ("listen-cli", "listen-http"):
+            self.assertRegex(config, rf"{listener} = 127\.0\.0\.1:")
+        self.assertIn("external/@PRIVATE_IPV4@!@ADVERTISED_IPV4@;internal/@PRIVATE_IPV4@", config)
+        self.assertNotRegex(config, r"(?m)^redis")
         self.assertIn('if not config.getboolean("no-fallback")', firstboot)
         self.assertIn('"X-aws-ec2-metadata-token"', firstboot)
 
     def test_kernel_is_updated_before_dkms_then_held(self) -> None:
-        tasks = text("ansible/roles/rtpengine_ami/tasks/main.yml")
-        update = tasks.index("Update all packages, including the kernel")
-        reboot = tasks.index("Reboot into the updated kernel")
-        build = tasks.index("Build native full-transcoding binary packages")
-        hold = tasks.index("Hold the running kernel and matching headers")
+        tasks = text("packer/rtpengine-arm64.pkr.hcl")
+        update = tasks.index("provision.sh upgrade")
+        reboot = tasks.index('"sudo reboot"')
+        build = tasks.index("provision.sh build")
+        hold = tasks.index("provision.sh hold")
         self.assertLess(update, reboot)
         self.assertLess(reboot, build)
         self.assertLess(build, hold)
-        self.assertIn("apt-mark hold", tasks)
+        self.assertIn("apt-mark hold", text("provision/provision.sh"))
+        self.assertIn("expect_disconnect = true", tasks)
+        self.assertLess(tasks.index("provision.sh cleanup"), tasks.index("provision.sh verify"))
+        self.assertLess(tasks.index("provision.sh verify"), tasks.index("provision.sh sanitize"))
+        self.assertNotIn('provisioner "ansible"', tasks)
 
     def test_workflow_has_ref_gate_split_oidc_and_failed_cleanup(self) -> None:
         workflow = (REPOSITORY_ROOT / ".github/workflows/rtpengine-ami.yml").read_text(

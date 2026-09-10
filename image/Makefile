@@ -2,7 +2,6 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 PACKER_DIR := packer
-ANSIBLE_DIR := ansible
 BUILD_DIR := build
 VARS_FILE ?= packer/rtpengine.pkrvars.hcl
 VARS_FILE_ABS = $(abspath $(VARS_FILE))
@@ -15,11 +14,11 @@ help:
 	@printf '%s\n' \
 	  'RTPengine Ubuntu 26.04 ARM64 AMI targets:' \
 	  '  make source                       Create deterministic committed-HEAD inputs (AWS-free)' \
-	  '  make init                         Install pinned Packer plugins/Ansible collections (AWS-free)' \
+	  '  make init                         Install pinned Packer plugins (AWS-free)' \
 	  '  make fmt                          Format Packer files (AWS-free)' \
 	  '  make check                        Run local syntax and format checks (AWS-free)' \
 	  '  make validate                     Validate Packer with non-secret placeholders (AWS-free)' \
-	  '  make lint                         Run shell, YAML, and Ansible linters (AWS-free)' \
+	  '  make lint                         Run shell and workflow YAML linters (AWS-free)' \
 	  '  make test                         Run image unit and contract tests (AWS-free)' \
 	  '  make inspect                      Inspect the Packer template (AWS-free)' \
 	  '  make build VARS_FILE=<file>       Create an AMI and EBS snapshot (MUTATES AWS)' \
@@ -28,7 +27,6 @@ help:
 
 init:
 	packer init $(PACKER_DIR)
-	ansible-galaxy collection install -r $(ANSIBLE_DIR)/requirements.yml
 
 source:
 	./scripts/prepare-source.sh
